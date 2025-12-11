@@ -2,17 +2,22 @@
 """
 KETEP 공지사항 모니터링 및 Slack 알림 봇
 - 오늘 날짜에 등록된 공지사항만 알림
+- 같은 날 중복 알림 방지
 """
 
 import os
 import re
+import json
+import hashlib
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from pathlib import Path
 
 # 설정
 KETEP_URL = "https://www.ketep.re.kr/board?menuId=MENU002080100000000&boardId=BOARD00022"
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+CACHE_FILE = Path("notified_today.json")
 
 # 브라우저처럼 보이는 헤더
 HEADERS = {
@@ -53,6 +58,36 @@ def is_today(date_str: str) -> bool:
             date_str == today_short_dot or
             date_numbers == today_numbers or
             date_numbers == today_numbers_short)
+
+
+def generate_notice_id(title: str) -> str:
+    """공지사항 고유 ID 생성 (제목 기반)"""
+    return hashlib.md5(title.encode()).hexdigest()[:12]
+
+
+def load_notified_today() -> set:
+    """오늘 이미 알림한 공지사항 ID 불러오기 (날짜가 다르면 초기화)"""
+    if not CACHE_FILE.exists():
+        return set()
+
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 저장된 날짜가 오늘이 아니면 초기화
+            if data.get("date") != datetime.now().strftime("%Y-%m-%d"):
+                return set()
+            return set(data.get("notified_ids", []))
+    except (json.JSONDecodeError, KeyError):
+        return set()
+
+
+def save_notified_today(notified_ids: set):
+    """오늘 알림한 공지사항 ID 저장"""
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "notified_ids": list(notified_ids)
+        }, f, ensure_ascii=False, indent=2)
 
 
 def fetch_ketep_notices() -> list:
@@ -209,6 +244,10 @@ def main():
     print(f"[{datetime.now().isoformat()}] KETEP 공지사항 모니터링 시작")
     print(f"오늘 날짜: {datetime.now().strftime('%Y-%m-%d')}")
 
+    # 오늘 이미 알림한 공지 불러오기
+    notified_ids = load_notified_today()
+    print(f"오늘 이미 알림한 공지: {len(notified_ids)}건")
+
     # 공지사항 크롤링
     all_notices = fetch_ketep_notices()
     print(f"크롤링한 공지사항: {len(all_notices)}건")
@@ -217,11 +256,25 @@ def main():
     today_notices = [n for n in all_notices if is_today(n["date"])]
     print(f"오늘 등록된 공지사항: {len(today_notices)}건")
 
-    if today_notices:
+    # 아직 알림하지 않은 공지만 필터링
+    new_notices = []
+    for notice in today_notices:
+        notice_id = generate_notice_id(notice["title"])
+        if notice_id not in notified_ids:
+            notice["id"] = notice_id
+            new_notices.append(notice)
+    print(f"새로 알림할 공지사항: {len(new_notices)}건")
+
+    if new_notices:
         # Slack 알림 전송
-        send_slack_notification(today_notices)
+        if send_slack_notification(new_notices):
+            # 알림 성공 시 ID 저장
+            for notice in new_notices:
+                notified_ids.add(notice["id"])
+            save_notified_today(notified_ids)
+            print("알림한 공지 ID 저장 완료")
     else:
-        print("오늘 등록된 새 공지사항이 없습니다.")
+        print("새로 알림할 공지사항이 없습니다.")
 
     print(f"[{datetime.now().isoformat()}] 모니터링 완료")
 

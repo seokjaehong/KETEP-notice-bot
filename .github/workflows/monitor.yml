@@ -28,8 +28,23 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
+      - name: 캐시 복원 (오늘 알림한 공지)
+        uses: actions/cache@v4
+        with:
+          path: notified_today.json
+          key: notified-${{ github.run_id }}
+          restore-keys: |
+            notified-
+
       - name: 공지사항 모니터링 실행
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           TZ: Asia/Seoul
         run: python scraper.py
+
+      - name: 캐시 저장 (오늘 알림한 공지)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: notified_today.json
+          key: notified-${{ github.run_id }}
