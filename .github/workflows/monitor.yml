@@ -1,0 +1,49 @@
+name: KETEP 공지사항 모니터링
+
+on:
+  schedule:
+    # 한국 시간 기준 (UTC+9)
+    # 09:00 KST = 00:00 UTC
+    # 14:00 KST = 05:00 UTC
+    # 18:00 KST = 09:00 UTC
+    - cron: '0 0 * * *'   # 매일 09:00 KST
+    - cron: '0 5 * * *'   # 매일 14:00 KST
+    - cron: '0 9 * * *'   # 매일 18:00 KST
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 레포지토리 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 캐시 복원 (이전 공지사항 ID)
+        uses: actions/cache@v4
+        with:
+          path: seen_notices.json
+          key: seen-notices-${{ github.run_id }}
+          restore-keys: |
+            seen-notices-
+
+      - name: 공지사항 모니터링 실행
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python scraper.py
+
+      - name: 캐시 저장 (확인한 공지사항 ID)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: seen_notices.json
+          key: seen-notices-${{ github.run_id }}
